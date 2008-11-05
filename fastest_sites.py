@@ -34,6 +34,7 @@ import sys
 import time
 import urllib
 
+INDENT = 8
 socket.setdefaulttimeout(5)
 
 class AsyncConnect(asyncore.dispatcher):
@@ -95,14 +96,16 @@ def Run(cmd):
 def FindFastest(varname, sitelist):
   latencies = {}
 
+  # Ignore duplicates
+  sitelist = set(sitelist)
+
   def callback(url, duration):
     latencies.setdefault(url, 0)
     latencies[url] += duration
 
-  count = 0
   for url in sitelist:
-    count += 1
     AsyncConnect(url, callback)
+  count = len(sitelist)
 
   # We probaly don't need more than 10 results, so if there are more than 10
   # servers, lets only track the first few that return quickly:
@@ -112,15 +115,11 @@ def FindFastest(varname, sitelist):
 
   if not latencies:
     # No data has come back yet, let's wait
-    print >>sys.stderr, " =>Still waiting on data for %s" % varname
+    print >>sys.stderr, " => Still waiting on data for %s" % varname
     asyncore.loop(timeout=30)
 
   # Close any still-open connections...
   asyncore.close_all()
-
-  # Average the latency values, if we use ITERATIONS
-  #for i in latencies.keys():
-    #latencies[i] /= float(ITERATIONS)
 
   # Return the latency dict sorted by latency as list of (key, value)
   latency_list = sorted(latencies.iteritems(), key=lambda (a,b): (b,a))
@@ -129,7 +128,16 @@ def FindFastest(varname, sitelist):
 var_re = re.compile(r"^(MASTER_SITE_[A-Z_]+)\+?=")
 sites_mk = "%s/Mk/bsd.sites.mk" % (GetVariable("PORTSDIR"))
 sites = {}
+bad_sites = {}
 site_latency = {}
+
+# Some sites use variables in them and due to the way we request the list of
+# sites these variables are not set, resulting in useless urls like
+# "http://.googlecode.com/files" because the original value was set to
+# "http://${PORTNAME}.googlecode.com/files"
+# We don't have access to those variables so we skip them.
+# It also catches http://www..com just in case that pops up in the future
+bad_site_regex = re.compile(r"(\/\/\.|\.\.|[a-zA-Z]\/\/)")
 
 fd = open(sites_mk, "r")
 for line in fd:
@@ -137,21 +145,31 @@ for line in fd:
   if match:
     varname = match.group(1)
     output = Run("make -V %s -f %s" % (varname, sites_mk))
-    sites[varname] = output.split()
+
+    site_is_bad = bad_site_regex.search(output)
+    if site_is_bad:
+      bad_sites[varname] = output.split()
+    else:
+      sites[varname] = output.split()
 
 for (varname, sitelist) in sites.iteritems():
   if len(sys.argv) > 1 and varname not in sys.argv[1:]:
     continue
+
   print >>sys.stderr, \
       " => Checking servers for %s (%d servers)" % (varname, len(sitelist))
   latency_list = FindFastest(varname, sitelist)
 
+  # Don't print the trailing slash on the last line.
   print "%s=\\" % varname
-  for (url, duration) in latency_list:
-    print "\t%s \\" % (url)
+  print " \\\n".join(url for url, duration in latency_list)
 
   print
   sys.stdout.flush()
 
-  # Let the network quiesce
-  #time.sleep(3)
+# Walk the dict of bad sites that we know cause problems.
+# If explicitly asked to sort one of them be verbose about skipping it
+# otherwise be silent.
+for (varname, sitelist) in bad_sites.iteritems():
+  if len(sys.argv) > 1 and varname in sys.argv[1:]:
+    print >>sys.stderr, "Unable to sort %s - skipping." % varname
