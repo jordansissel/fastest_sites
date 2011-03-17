@@ -64,12 +64,15 @@ class AsyncConnect(asyncore.dispatcher):
     (scheme, remainder) = self._url.split(":", 2)
     (host, unused_path) = urllib.splithost(remainder)
     self._host = host
-    self._port = AsyncConnect.schemes[scheme]
+    self._port = AsyncConnect.schemes[scheme.lower()]
 
   def handle_connect(self):
     pass
 
   def handle_read(self):
+    pass
+
+  def handle_error(self):
     pass
 
   def handle_write(self):
